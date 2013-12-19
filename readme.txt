@@ -1,13 +1,17 @@
 Description
 -----------
 
-Webseen.mod is an addon to gseen.mod. Like the name already indicates,
-it creates an webinterface to gseen.mod. Just like stats.mod, it starts
-its own webserver on a specified port (8044 by default).
+Webseen.mod is an experimental addon to the eggdrop module gseen.mod. Like the
+name already indicates, it creates an webinterface to gseen.mod. Just like
+stats.mod, it starts its own webserver on a specified port (8044 by default).
 
 It has support for multiple skins and languages.
 
-
+ATTENTION: Please note that webseen.mod is far from ready from production use
+and not actively maintained. It hasn't been updated for over a decade. It
+probably will not be usable without adjustments. It requires a specific
+version of gseen - which one exactly has not been passed down over the years.
+The last known update to the code was on June 18th, 2001.
 
 Installation
 ------------
@@ -35,15 +39,7 @@ properly, but if anything gets screwed up, I'm not responsible. Use this
 module at your own risk.
 
 
+About the author:
+-----------------
 
-Feedback:
----------
-
-Feel free to send feedback or bugreports to florian@visions-of-fantasy.de
-
-
-The latest version of this module can always be found at
-
-http://www.visions-of-fantasy.de/webseen.mod/
-
-Have fun...
+Webseen.mod has been created by Florian Sander - http://www.kreativrauschen.de
