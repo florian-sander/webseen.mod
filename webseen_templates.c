@@ -30,11 +30,8 @@
 #define TPL_TOTAL_QUERIES 11
 #define TPL_TOTAL_SEARCHTIME 12
 #define TPL_AVERAGE_SEARCHTIME 13
+#define TPL_MODULE_VERSION 14
 
-static void template_add_cmd_init_colorfade(struct tpl_content *, char *);
-static void template_init_colorfade(int, struct tpl_content *);
-static void template_send_fcolor(int, struct tpl_content *);
-static void template_fade_color(int, struct tpl_content *);
 static void template_send_misc(int, struct tpl_content *);
 static void template_send_results(int, struct tpl_content *);
 static void template_send_time(int, struct tpl_content *);
@@ -51,13 +48,7 @@ static int template_add_custom_command(struct tpl_content *tpc, char *command)
 {
   char *s;
 
-  if (!strncasecmp(command, "fcolor", 6)) {
-    tpc->command = template_send_fcolor;
-  } else if (!strncasecmp(command, "fade_color", 10)) {
-    tpc->command = template_fade_color;
-  } else if (!strncasecmp(command, "init_colorfade", 14)) {
-    template_add_cmd_init_colorfade(tpc, command + 14);
-  } else if (!strncasecmp(command, "results", 7)) {
+  if (!strncasecmp(command, "results", 7)) {
     template_add_cmd_results(tpc, command + 8);
   } else if (!strncasecmp(command, "time", 4)) {
     tpc->command = template_send_time;
@@ -144,6 +135,8 @@ static void template_send_misc(int idx, struct tpl_content *tpc)
     dprintf(idx, "%.3f", glob_total_searchtime);
   else if (tpc->what == TPL_AVERAGE_SEARCHTIME)
     dprintf(idx, "%.3f", glob_total_searchtime / (float) glob_total_queries);
+  else if (tpc->what == TPL_MODULE_VERSION)
+    dprintf(idx, "%s", MODULE_VERSION);
   else
     dprintf(idx, "<H1>ERROR! template_send_misc(): no directive to process %d"
             "</H1>", tpc->what);
@@ -241,81 +234,3 @@ static void template_send_ifonchan(int idx, struct tpl_content *h_tpc)
     }
   }
 }
-
-/* template_add_cmd_init_colorfade():
- * Parameters: <startcolor> <endcolor> [steps]
- * initialiazes a color-fade from <startcolor> to <endcolor>
- * in [steps] steps. (if steps isn't defined, numresults is used)
- */
-static void template_add_cmd_init_colorfade(struct tpl_content *h_tpc, char *params)
-{
-  char *startcolor, *endcolor, *steps;
-  float istartcolor, iendcolor, isteps;
-
-  Context;
-  // remove leading spaces
-  while (params[0] == ' ')
-    params++;
-  // get the parameters
-  startcolor = newsplit(&params);
-  endcolor = newsplit(&params);
-  steps = newsplit(&params);
-  istartcolor = strtol(startcolor, NULL, 0);
-  iendcolor = strtol(endcolor, NULL, 0);
-  isteps = strtol(steps, NULL, 0);
-  // if there's no valid value for steps (strtol() returns 0 if it failed),
-  // then just leave the 0. We'll replace it with numresults later
-
-  // now write a pointer to the executing command and all parameters into our
-  // content structure
-  h_tpc->command = template_init_colorfade;
-  h_tpc->floatpar1 = istartcolor;
-  h_tpc->floatpar2 = iendcolor;
-  h_tpc->intpar1 = isteps;
-}
-
-/* template_init_colorfade()
- * see template_add_cmd_init_colorfade for description
- */
-static void template_init_colorfade(int idx, struct tpl_content *htpc)
-{
-  int wert, steps;
-  float r2, b2, g2;
-
-  // find out how many steps the color fade will have
-  steps = htpc->intpar1;
-  // if it has 0 steps, then the number of steps wasn't specified as parameter,
-  // so we'll just use the number of results
-  if (!steps)
-    steps = numresults;
-  // split our r/g/b values of the starting color (stored in intpar1)
-  wert = htpc->floatpar1;
-  glob_b = wert & 0xff; glob_g = (wert & 0xff00) >> 8; glob_r = (wert & 0xff0000) >> 16;
-  // now do the same with the target color (intpar2)
-  wert = htpc->floatpar2;
-  b2 = wert & 0xff; g2 = (wert & 0xff00) >> 8; r2 = (wert & 0xff0000) >> 16;
-  // finally, determine the "length" of a step between colors
-  glob_rstep = (r2 - glob_r) / steps;
-  glob_gstep = (g2 - glob_g) / steps;
-  glob_bstep = (b2 - glob_b) / steps;
-  // all global variables are now initialized and can be used.
-}
-
-/* template_send_fcolor():
- * outputs the current color-code
- */
-static void template_send_fcolor(int idx, struct tpl_content *htpc)
-{
-  dprintf(idx, "#%02x%02x%02x", (int) glob_r, (int)  glob_g, (int) glob_b);
-}
-
-/* template_fade_color():
- * fades the color one step further
- */
-static void template_fade_color(int idx, struct tpl_content *htpc)
-{
-  glob_r += glob_rstep;
-  glob_g += glob_gstep;
-  glob_b += glob_bstep;
-}
-

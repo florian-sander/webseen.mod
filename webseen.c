@@ -19,7 +19,7 @@
 #define MODULE_NAME "webseen"
 #define MODULE_VERSION "0.3.1"
 #define MAKING_WEBSEEN
-#include "../module.h"
+#include "src/mod/module.h"
 #include "gseen.mod/gseen.h"
 #include <stdlib.h>
 
@@ -61,8 +61,6 @@ static int offset = 0;
 /* global vars for exchanging data between functions */
 gseenres *glob_results, *glob_result;
 
-#include "mini_httpd.h"
-#include "templates.h"
 #include "mini_httpd.c"
 #include "templates.c"
 #include "webseen_templates.c"

@@ -15,6 +15,9 @@
  * along with this program; if not, write to the Free Software
  * Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
  */
+
+#define TEMPLATE_ENGINE_VERSION "1.0.0"
+
 /* templates.c
  *
  * template engine for use with mini_httpd.c
@@ -30,13 +33,105 @@
  * Call loadtemplate(skin, lang, name, file)
  */
 
-static struct template_skins *template_list;
-static struct template_descriptions *skin_descriptions, *lang_descriptions, *glob_desc;
+static void init_templates();
+static int expmem_templates();
+static void unload_templates();
 
-static float glob_r, glob_g, glob_b, glob_rstep, glob_gstep, glob_bstep;
+// template header struct. Stores the name and a pointer to the content
+// of an template.
+struct templates {
+  struct templates *next;
+  char *name;
+  struct tpl_content *contents;
+};
 
-static char *template_skin, *template_lang;
-static char *default_skin, *default_lang;
+// template content struct. Stores the content (html and command pointers)
+// of an template
+struct tpl_content {
+  struct tpl_content *next;
+  char *html;
+  void (*command) (int, struct tpl_content *);
+  int what;
+  char *charpar1;
+  float floatpar1;
+  float floatpar2;
+  int intpar1;
+  struct tpl_content *subcontent;
+};
+
+// template language struct
+// contains the language name and a pointer to the template itself
+struct template_language {
+  struct template_language *next;
+  char *language;
+  struct templates *tpl;
+};
+
+// template skin struct
+// contains the name of the skin and a pointer to the language-list
+struct template_skins {
+  char *skin;
+  struct template_skins *next;
+  struct template_language *langs;
+};
+
+// "ger" == "Deutsch",
+// "default" == "Google"
+// etc...
+struct template_descriptions {
+  struct template_descriptions *next;
+  char *name;
+  char *desc;
+};
+
+static int expmem_tpl_content(struct tpl_content *);
+static void free_template_content(struct tpl_content *);
+static void free_skins(struct template_skins *);
+static void free_language(struct template_language *);
+static void free_template(struct templates *);
+static void free_descriptions(struct template_descriptions *);
+static void template_destroy(char *, char *, char *);
+static void add_description(char *, char *, char *);
+static int loadtemplate(char *, char *, char *, char *);
+static int template_parse_content(struct templates *, struct tpl_content *, char *);
+static struct templates *template_find(char *, char *, char *);
+static struct templates *template_create(char *, char *, char *);
+static void template_add_html(struct tpl_content *, char *);
+static void template_add_command(struct tpl_content *, char *);
+static void template_send(int, char *);
+static void template_send_contents(int, struct tpl_content *);
+static struct tpl_content *template_create_content(struct templates *);
+static struct tpl_content *template_create_subcontent(struct tpl_content *);
+static void template_add_cmd_init_colorfade(struct tpl_content *, char *);
+static void template_init_colorfade(int, struct tpl_content *);
+static void template_send_fcolor(int, struct tpl_content *);
+static void template_fade_color(int, struct tpl_content *);
+static void template_add_cmd_template(struct tpl_content *, char *);
+static void template_send_template(int, struct tpl_content *);
+static void template_send_module_version(int, struct tpl_content *);
+static int template_add_custom_command(struct tpl_content *, char *);
+static void template_add_cmd_langlist(struct tpl_content *, char *);
+static void template_add_cmd_skinlist(struct tpl_content *, char *);
+static void template_send_langlist(int, struct tpl_content *);
+static void template_send_skinlist(int, struct tpl_content *);
+static void template_add_cmd_ifactivelang(struct tpl_content *, char *);
+static void template_send_ifactivelang(int, struct tpl_content *);
+static void template_add_cmd_ifactiveskin(struct tpl_content *, char *);
+static void template_send_ifactiveskin(int, struct tpl_content *);
+static void template_send_name(int, struct tpl_content *);
+static void template_send_desc(int, struct tpl_content *);
+static void template_send_server_version(int, struct tpl_content *);
+static void template_send_server_port(int, struct tpl_content *);
+static void template_send_url(int, struct tpl_content *);
+
+
+struct template_skins *template_list;
+struct template_descriptions *skin_descriptions, *lang_descriptions, *glob_desc;
+
+float glob_r, glob_g, glob_b, glob_rstep, glob_gstep, glob_bstep;
+
+char *template_skin, *template_lang;
+char *default_skin, *default_lang;
 
 /* init_templates()
  * initializes some global variables
@@ -295,11 +390,10 @@ static int loadtemplate(char *skin, char *lang, char *name, char *file)
   content = nmalloc(1);
   content[0] = 0;
   while (!feof(f)) {
-    if (fgets(buf, TEMPLATE_LINE_LENGTH, f)) {
-      buf[TEMPLATE_LINE_LENGTH] = 0;
-      content = nrealloc(content, strlen(content) + strlen(buf) + 1);
-      strcat(content, buf);
-    }
+    fgets(buf, TEMPLATE_LINE_LENGTH, f);
+    buf[TEMPLATE_LINE_LENGTH] = 0;
+    content = nrealloc(content, strlen(content) + strlen(buf) + 1);
+    strcat(content, buf);
   }
   fclose(f);
   // then create a new template
@@ -362,14 +456,11 @@ static int template_parse_content(struct templates *h_tpl, struct tpl_content *h
         template_add_html(tpc, content);
         // now terminate the end of the command and add it
         s[0] = 0;
-        // unless the command is just a comment, add it to the content
-        if (!(!strncmp(cmdstart + 2, "--", 2))) {
-          if (h_tpl)
-            tpc = template_create_content(h_tpl);
-          else
-            tpc = template_create_subcontent(h_tpc);
-          template_add_command(tpc, cmdstart + 2);
-        }
+        if (h_tpl)
+          tpc = template_create_content(h_tpl);
+        else
+          tpc = template_create_subcontent(h_tpc);
+        template_add_command(tpc, cmdstart + 2);
         // set the start of content to the first char after the command
         content = s + 2;
         s = content;
@@ -572,6 +663,12 @@ static void template_add_command(struct tpl_content *tpc, char *command)
     tpc->command = template_send_server_version;
   } else if (!strncasecmp(command, "server_port", 11)) {
     tpc->command = template_send_server_port;
+  } else if (!strncasecmp(command, "fcolor", 6)) {
+    tpc->command = template_send_fcolor;
+  } else if (!strncasecmp(command, "fade_color", 10)) {
+    tpc->command = template_fade_color;
+  } else if (!strncasecmp(command, "init_colorfade", 14)) {
+    template_add_cmd_init_colorfade(tpc, command + 14);
   } else if (!strncasecmp(command, "template", 8)) {
     template_add_cmd_template(tpc, command + 8);
   } else if (!strncasecmp(command, "langlist", 8)) {
@@ -586,8 +683,8 @@ static void template_add_command(struct tpl_content *tpc, char *command)
     tpc->command = template_send_name;
   } else if (!strncasecmp(command, "desc", 4)) {
     tpc->command = template_send_desc;
-  } else if (!strncasecmp(command, "requested_url", 13)) {
-    tpc->command = template_send_requested_url;
+  } else if (!strncasecmp(command, "url", 3)) {
+    tpc->command = template_send_url;
   } else {
     if (!template_add_custom_command(tpc, command)) {
       // if no matching function is found, log an error and write a warning
@@ -645,6 +742,83 @@ static void template_send_contents(int idx, struct tpl_content *tpc)
 static void template_send_module_version(int idx, struct tpl_content *tpc)
 {
   dprintf(idx, "%s", MODULE_VERSION);
+}
+
+/* template_add_cmd_init_colorfade():
+ * Parameters: <startcolor> <endcolor> [steps]
+ * initialiazes a color-fade from <startcolor> to <endcolor>
+ * in [steps] steps. (if steps isn't defined, numresults is used)
+ */
+static void template_add_cmd_init_colorfade(struct tpl_content *h_tpc, char *params)
+{
+  char *startcolor, *endcolor, *steps;
+  float istartcolor, iendcolor, isteps;
+
+  Context;
+  // remove leading spaces
+  while (params[0] == ' ')
+    params++;
+  // get the parameters
+  startcolor = newsplit(&params);
+  endcolor = newsplit(&params);
+  steps = newsplit(&params);
+  istartcolor = strtol(startcolor, NULL, 0);
+  iendcolor = strtol(endcolor, NULL, 0);
+  isteps = strtol(steps, NULL, 0);
+  // if there's no valid value for steps (strtol() returns 0 if it failed),
+  // then just leave the 0. We'll replace it with numresults later
+
+  // now write a pointer to the executing command and all parameters into our
+  // content structure
+  h_tpc->command = template_init_colorfade;
+  h_tpc->floatpar1 = istartcolor;
+  h_tpc->floatpar2 = iendcolor;
+  h_tpc->intpar1 = isteps;
+}
+
+/* template_init_colorfade()
+ * see template_add_cmd_init_colorfade for description
+ */
+static void template_init_colorfade(int idx, struct tpl_content *htpc)
+{
+  int wert, steps;
+  float r2, b2, g2;
+
+  // find out how many steps the color fade will have
+  steps = htpc->intpar1;
+  // if it has 0 steps, then the number of steps wasn't specified as parameter,
+  // so we'll just use the number of results
+  if (!steps)
+    steps = numresults;
+  // split our r/g/b values of the starting color (stored in intpar1)
+  wert = htpc->floatpar1;
+  glob_b = wert & 0xff; glob_g = (wert & 0xff00) >> 8; glob_r = (wert & 0xff0000) >> 16;
+  // now do the same with the target color (intpar2)
+  wert = htpc->floatpar2;
+  b2 = wert & 0xff; g2 = (wert & 0xff00) >> 8; r2 = (wert & 0xff0000) >> 16;
+  // finally, determine the "length" of a step between colors
+  glob_rstep = (r2 - glob_r) / steps;
+  glob_gstep = (g2 - glob_g) / steps;
+  glob_bstep = (b2 - glob_b) / steps;
+  // all global variables are now initialized and can be used.
+}
+
+/* template_send_fcolor():
+ * outputs the current color-code
+ */
+static void template_send_fcolor(int idx, struct tpl_content *htpc)
+{
+  dprintf(idx, "#%02x%02x%02x", (int) glob_r, (int)  glob_g, (int) glob_b);
+}
+
+/* template_fade_color():
+ * fades the color one step further
+ */
+static void template_fade_color(int idx, struct tpl_content *htpc)
+{
+  glob_r += glob_rstep;
+  glob_g += glob_gstep;
+  glob_b += glob_bstep;
 }
 
 /* template_add_cmd_template():
@@ -778,14 +952,13 @@ static void template_send_server_version(int idx, struct tpl_content *tpc)
  */
 static void template_send_server_port(int idx, struct tpl_content *tpc)
 {
-  if (httpd_dcc_index >= 0)
-    dprintf(idx, "%d", dcc[httpd_dcc_index].port);
+  dprintf(idx, "%d", dcc[httpd_dcc_index].port);
 }
 
-/* <?requested_URL?>
+/* <?URL?>
  * outputs the requested url
  */
-static void template_send_requested_url(int idx, struct tpl_content *tpc)
+static void template_send_url(int idx, struct tpl_content *tpc)
 {
   Assert(http_connection(idx)->get);
   dprintf(idx, "%s", http_connection(idx)->get);

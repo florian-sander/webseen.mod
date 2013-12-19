@@ -1,7 +1,7 @@
 <!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.0 Transitional//EN">
 <HTML><HEAD><TITLE>404 nicht gefunden</TITLE>
 <BODY>
-<H1>nicht gefunden</H1>Die URL <?requested_URL?> konnte auf diesem Server nicht gefunden werden.
+<H1>nicht gefunden</H1>Die URL <?URL?> konnte auf diesem Server nicht gefunden werden.
 <P>
 <HR>
 

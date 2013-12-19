@@ -16,6 +16,8 @@
  * Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
  */
 
+#define HTTPD_VERSION "1.1.0"
+
 /* mini_httpd.c
  *
  * minimalistic http server for use in eggdrop modules
@@ -31,7 +33,7 @@
  *
  * create a function "static void process_get_request(idx);". This function
  * gets called when someone connects to your server and sends an GET request.
- * you can access the requested path with http_connection(idx)->path.
+ * you can access the requested path with http_connection(idx)->get.
  *
  * Don't forget to send the http header with send_http_header(int idx, code)
  * before you start sending the output.
@@ -61,16 +63,74 @@
  *
  */
 
+static void process_get_request(int);
+
 static char httpd_ip[21] = "";
-static char httpd_loglevel[21] = "1";
+static char httpd_loglevel[20] = "1";
 static char httpd_ignore_msg[256] = "<H1>You are on ignore.</H1>";
 static char httpd_log[121] = "";
 static int max_http_thr = 0;
 static int max_http_time = 0;
-static int http_timeout = 5;
+static int http_timeout = 2;
 static int httpd_dcc_index = -1;
 
-static char *decoded_url = NULL;
+char *decoded_url;
+
+struct cookielist {
+  struct cookielist *next;
+  char *name;
+  char *value;
+};
+
+struct paramlist {
+  struct paramlist *next;
+  char *param;
+  char *value;
+};
+
+struct http_connection_data {
+  int traffic;
+  int code;
+  char *browser;
+  char *referer;
+  char *get;
+  char *cmd;
+  struct cookielist *cookies;
+  struct paramlist *params;
+};
+
+static void init_httpd();
+static int expmem_httpd();
+static void unload_httpd();
+static void start_httpd(int);
+static void stop_httpd();
+static void init_http_connection_data(int);
+static void free_http_connection_data(int);
+static void http_activity(int, char *, int);
+static void send_http_header(int, int);
+static void add_cookies(int, char *);
+static int expmem_cookies(struct cookielist *);
+static void free_cookies(struct cookielist *);
+static char *get_cookie_value(int, char *);
+static void add_params(int, char *);
+static int expmem_params(struct paramlist *);
+static void free_params(struct paramlist *);
+static char *get_param_value(int, char *);
+#ifndef OLDBOT
+static void outdone_http(int);
+#endif
+static void display_http(int, char *);
+static void display_httpd_accept(int, char *);
+static void timeout_http(int);
+static void timeout_listen_httpd(int);
+static void kill_http(int, void *);
+static int expmem_http(void *);
+static void out_http(int, char *, void *);
+static void httpd_accept(int, char *, int);
+static int http_flood();
+static void eof_http(int);
+static char *decode_url(char *);
+static char *csplit(char **, char);
 
 static struct dcc_table MHTTPD_CON_HTTPD =
 {
@@ -106,6 +166,8 @@ static struct dcc_table MHTTPD_CON_HTTP =
 };
 
 #define http_connection(i) ((struct http_connection_data *) dcc[(i)].u.other)
+
+char *decoded_url = NULL;
 
 /* init_httpd()
  * initializes a few variables
@@ -219,50 +281,10 @@ static void init_http_connection_data(int idx)
   http_connection(idx)->code = -1;
   http_connection(idx)->browser = NULL;
   http_connection(idx)->referer = NULL;
-  http_connection(idx)->path = NULL;
+  http_connection(idx)->get = NULL;
   http_connection(idx)->cmd = NULL;
-  http_connection(idx)->postparams = NULL;
   http_connection(idx)->cookies = NULL;
   http_connection(idx)->params = NULL;
-  http_connection(idx)->headers = NULL;
-  http_connection(idx)->langs = NULL;
-  http_connection(idx)->getpostparams = 0;
-  http_connection(idx)->content_length = 0;
-}
-
-/* expmem_http()
- * expmem's all data allocated to store browser info, referer, cookies, etc...
- */
-static int expmem_http(void *x)
-{
-  register struct http_connection_data *p = (struct http_connection_data *) x;
-  int tot = 0;
-
-  Context;
-  if (!p) {
-    putlog(LOG_MISC, "*", "Can't expmem clientinfo, no pointer. This should not happen!");
-    return 0;
-  }
-  tot += sizeof(struct http_connection_data);
-  if (p->browser)
-    tot += strlen(p->browser) + 1;
-  if (p->referer)
-    tot += strlen(p->referer) + 1;
-  if (p->path)
-    tot += strlen(p->path) + 1;
-  if (p->cmd)
-    tot += strlen(p->cmd) + 1;
-  if (p->postparams)
-    tot += strlen(p->postparams) + 1;
-  if (p->cookies)
-    tot += llist_2string_expmem(p->cookies);
-  if (p->params)
-    tot += llist_2string_expmem(p->params);
-  if (p->headers)
-    tot += llist_1string_expmem(p->headers);
-  if (p->langs)
-    tot += llist_1string_expmem(p->langs);
-  return tot;
 }
 
 /* free_http_connection_data():
@@ -274,20 +296,14 @@ static void free_http_connection_data(int idx)
     nfree(http_connection(idx)->browser);
   if (http_connection(idx)->referer)
     nfree(http_connection(idx)->referer);
-  if (http_connection(idx)->path)
-    nfree(http_connection(idx)->path);
+  if (http_connection(idx)->get)
+    nfree(http_connection(idx)->get);
   if (http_connection(idx)->cmd)
     nfree(http_connection(idx)->cmd);
-  if (http_connection(idx)->postparams)
-    nfree(http_connection(idx)->postparams);
   if (http_connection(idx)->cookies)
-    llist_2string_free(http_connection(idx)->cookies);
+    free_cookies(http_connection(idx)->cookies);
   if (http_connection(idx)->params)
-    llist_2string_free(http_connection(idx)->params);
-  if (http_connection(idx)->headers)
-    llist_1string_free(http_connection(idx)->headers);
-  if (http_connection(idx)->langs)
-    llist_1string_free(http_connection(idx)->langs);
+    free_params(http_connection(idx)->params);
   nfree(http_connection(idx));
 }
 
@@ -296,13 +312,10 @@ static void free_http_connection_data(int idx)
  */
 static void http_activity(int idx, char *buf, int len)
 {
-  char *cmd, *path, *imask, *params;
-  int i, lev, content_length;
-  struct timeval t;
-  double pre_time;
+  char *cmd, *path, *imask;
+  int lev;
 
   debug2("%s: %s", dcc[idx].host, buf);
-
   // at first, check if the user is on ignore and therefore should
   // be ignored
   imask = nmalloc(strlen(dcc[idx].host) + 11);
@@ -318,23 +331,16 @@ static void http_activity(int idx, char *buf, int len)
     return;
   }
   nfree(imask);
-
-  if ((http_connection(idx)->content_length > 0) && (http_connection(idx)->getpostparams)) {
-    append_postparam_string(idx, buf);
-    return;
-  }
-
-  // then check for recognized commands which we want to be logged
+  // at first, check for recognized commands which we want to be logged
   // (only GET is supported, at the moment)
-  if ((!strncasecmp(buf, "GET ", 4) || !strncasecmp(buf, "POST ", 5))
-      && !http_connection(idx)->cmd) {
+  if (!strncasecmp(buf, "GET ", 4) && !http_connection(idx)->cmd) {
     http_connection(idx)->cmd = nmalloc(strlen(buf) + 1);
     strcpy(http_connection(idx)->cmd, buf);
   }
   // now check if we know the command and store all info that we need
   cmd = newsplit(&buf);
   // GET: request for a document
-  if (!strcasecmp(cmd, "GET") || !strcasecmp(cmd, "POST")) {
+  if (!strcasecmp(cmd, "GET")) {
     // at first, check if we're being flooded and kill the connection
     // if there were too many requests.
     if (http_flood()) {
@@ -343,21 +349,17 @@ static void http_activity(int idx, char *buf, int len)
       lostdcc(idx);
       return;
     }
-//    if (!strcasecmp(cmd, "POST"))
-//      http_connection(idx)->getpostparams = 1;
     // now log the access
-    Assert(http_connection(idx)->cmd);
     lev = logmodes(httpd_loglevel);
     if (lev)
-      putlog(lev, "*", "%s: %s", dcc[idx].host, http_connection(idx)->cmd);
+      putlog(lev, "*", "%s: GET %s", dcc[idx].host, buf);
     // and finally store the request, if there wasn't already one before.
-    if (!http_connection(idx)->path) {
-      params = newsplit(&buf);
-      path = csplit(&params, '?');
+    if (!http_connection(idx)->get) {
+      path = newsplit(&buf);
       // cut the parameters off and store them
-      add_params(idx, params);
-      http_connection(idx)->path = nmalloc(strlen(path) + 1);
-      strcpy(http_connection(idx)->path, path);
+      add_params(idx, path);
+      http_connection(idx)->get = nmalloc(strlen(path) + 1);
+      strcpy(http_connection(idx)->get, path);
     }
   // user-agent: browser-information
   } else if (!strcasecmp(cmd, "User-Agent:")) {
@@ -372,39 +374,37 @@ static void http_activity(int idx, char *buf, int len)
     strcpy(http_connection(idx)->referer, buf);
   } else if (!strcasecmp(cmd, "Cookie:")) {
     add_cookies(idx, buf);
-  } else if (!strcasecmp(cmd, "Content-Length:") && !http_connection(idx)->content_length) {
-    content_length = atoi(buf);
-    debug1("setting content length to %d", content_length);
-    http_connection(idx)->content_length = content_length;
-  } else if (!strcasecmp(cmd, "Accept-language:")) {
-    add_language(idx, buf);
   } else if (!buf[0]) {
-    if (http_connection(idx)->cmd && !(!strncasecmp(http_connection(idx)->cmd, "POST ", 5))) {
-      debug0("now sending...");
-      gettimeofday(&t, NULL);
-      pre_time = (float) t.tv_sec + (((float) t.tv_usec) / 1000000);
-      process_get_request(idx);
-      gettimeofday(&t, NULL);
-      debug1("Processing time: %.3f", ((float) t.tv_sec + (((float) t.tv_usec) / 1000000)) - pre_time);
-      dcc[idx].status = 1;
+    process_get_request(idx);
+    dcc[idx].status = 1;
 #ifndef OLDBOT
-      /* If there's no data in our socket, we immediately get rid of it.
-       */
-      if (!sock_has_data(SOCK_DATA_OUTGOING, dcc[idx].sock)) {
-        killsock(dcc[idx].sock);
-        lostdcc(idx);
-      }
-#endif
-    } else {
-      debug0("waiting for post params...");
-      http_connection(idx)->getpostparams = 1;
-      i = sockoptions(dcc[idx].sock, EGG_OPTION_UNSET, SOCK_BUFFER);
-      if (i)
-        debug1("WARNING: sockoptions returned %d while trying to deativate "
-               "buffering for POST parameters!", i);
-      flush_inbuf(idx);
+    /* If there's no data in our socket, we immediately get rid of it.
+     */
+    if (!sock_has_data(SOCK_DATA_OUTGOING, dcc[idx].sock)) {
+      killsock(dcc[idx].sock);
+      lostdcc(idx);
     }
+#endif
   }
+}
+
+/* send_http_header()
+ * sends the http header
+ */
+static void send_http_header(int idx, int code)
+{
+  if (code == 200)
+    dprintf(idx, "HTTP/1.0 200 OK\n");
+  else if (code == 401)
+    dprintf(idx, "HTTP/1.0 401 Access Forbidden\n");
+  else if (code == 404)
+    dprintf(idx, "HTTP/1.1 404 Not Found\n");
+  else
+    dprintf(idx, "HTTP/1.0 %d\n", code);
+  dprintf(idx, "Server: EggdropMiniHTTPd/%s\n", HTTPD_VERSION);
+  dprintf(idx, "Content-Type: text/html\n");
+  dprintf(idx, "\n");
+  http_connection(idx)->code = code;
 }
 
 /* add_cookies()
@@ -412,6 +412,7 @@ static void http_activity(int idx, char *buf, int len)
  */
 static void add_cookies(int idx, char *buf)
 {
+  struct cookielist *nc;
   char *cookie, *name, *value;
 
   while (buf[0]) {
@@ -420,15 +421,57 @@ static void add_cookies(int idx, char *buf)
       cookie++;
     name = csplit(&cookie, '=');
     value = cookie;
-    http_connection(idx)->cookies
-               = llist_2string_add(http_connection(idx)->cookies, name, value);
+    nc = nmalloc(sizeof(struct cookielist));
+    nc->next = NULL;
+    nc->name = nmalloc(strlen(name) + 1);
+    strcpy(nc->name, name);
+    nc->value = nmalloc(strlen(value) + 1);
+    strcpy(nc->value, value);
+    nc->next = http_connection(idx)->cookies;
+    http_connection(idx)->cookies = nc;
+  }
+}
+
+/* expmem_cookies()
+ * simple expmem function for a cookie list
+ */
+static int expmem_cookies(struct cookielist *c)
+{
+  int size = 0;
+
+  for (; c; c = c->next) {
+    size += sizeof(struct cookielist);
+    size += strlen(c->name) + 1;
+    size += strlen(c->value) + 1;
+  }
+  return size;
+}
+
+/* free_cookies()
+ * simple function to free a cookie list (surprise!)
+ */
+static void free_cookies(struct cookielist *c)
+{
+  struct cookielist *next;
+
+  while (c) {
+    next = c->next;
+    nfree(c->name);
+    nfree(c->value);
+    nfree(c);
+    c = next;
   }
 }
 
 static char *get_cookie_value(int idx, char *name)
 {
+  struct cookielist *cookie;
+
   Assert(idx >= 0);
-  return llist_2string_get_s2(http_connection(idx)->cookies, name);
+  for (cookie = http_connection(idx)->cookies; cookie; cookie = cookie->next)
+    if (!strcasecmp(cookie->name, name))
+      return cookie->value;
+  return NULL;
 }
 
 /* add_params():
@@ -438,44 +481,57 @@ static char *get_cookie_value(int idx, char *name)
 static void add_params(int idx, char *buf)
 {
   char *param, *name, *value;
+  struct paramlist *p;
 
-  if (strchr(buf, '?')) {
-    debug1("WARNING: '?' found in paramstring '%s'. This should have been "
-           "already split!", buf);
-    return;
-  }
-
+  csplit(&buf, '?');
   while (buf[0]) {
     param = csplit(&buf, '&');
     name = csplit(&param, '=');
     value = decode_url(param);
-    debug2("adding parameter: '%s'='%s'", name, value);
-    http_connection(idx)->params
-               = llist_2string_add(http_connection(idx)->params, name, value);
+    p = nmalloc(sizeof(struct paramlist));
+    p->param = nmalloc(strlen(name) + 1);
+    strcpy(p->param, name);
+    p->value = nmalloc(strlen(value) + 1);
+    strcpy(p->value, value);
+    p->next = http_connection(idx)->params;
+    http_connection(idx)->params = p;
+  }
+}
+
+static int expmem_params(struct paramlist *p)
+{
+  int size = 0;
+
+  for (; p; p = p->next) {
+    size += sizeof(struct paramlist);
+    size += strlen(p->param) + 1;
+    size += strlen(p->value) + 1;
+  }
+  return size;
+}
+
+static void free_params(struct paramlist *p)
+{
+  struct paramlist *next;
+
+  while (p) {
+    next = p->next;
+    nfree(p->param);
+    nfree(p->value);
+    nfree(p);
+    p = next;
   }
 }
 
 static char *get_param_value(int idx, char *name)
 {
-  Assert(idx >= 0);
-  return llist_2string_get_s2(http_connection(idx)->params, name);
-}
+  struct paramlist *param;
 
-static void add_language(int idx, char *buf)
-{
-  char *lang;
-  
-  if (buf)
-    buf = csplit(&buf, ';'); /* strip "; q=1.5", whatever it means... */
-  while (buf[0]) {
-    lang = csplit(&buf, ',');
-    lang = csplit(&buf, '-'); /* en-us => en */
-    while (lang[0] == ' ')
-      lang++;
-    debug1("adding accepted language: '%s'", lang);
-    http_connection(idx)->langs =
-    	llist_1string_add(http_connection(idx)->langs, lang);
-  }
+  Assert(idx >= 0);
+  for (param = http_connection(idx)->params; param; param = param->next)
+    if (!strcasecmp(param->param, name))
+      return param->value;
+  return NULL;
 }
 
 #ifndef OLDBOT
@@ -501,21 +557,6 @@ static void display_httpd_accept(int idx, char *buf)
 
 static void timeout_http(int idx)
 {
-  if (http_connection(idx)->getpostparams && http_connection(idx)->path) {
-    // If there's still something in the inbuffer, then we might still be receivng
-    // POST parameters or something. Just let the connection live a bit longer.
-    // (FIXME: DOSable by flooding with body)
-    if (flush_inbuf(idx) > 0) {
-      debug0("inbuf not empty on timeout. Flushed...");
-      dcc[idx].timeval = now;
-      return;
-    }
-  }
-  send_http_header(idx, 408);
-  dprintf(idx, "<html>\n<head><title>408 Request Time-out</title></head>\n"
-               "<body>\n<H1>Request Time-out</H1><br>\nYour browser didn't "
-               "send enough information to process the request within %d "
-               "seconds.\n</body>\n</html>\n", http_timeout);
   killsock(dcc[idx].sock);
   lostdcc(idx);
 }
@@ -574,6 +615,35 @@ static void kill_http(int idx, void *x)
   }
   // don't forget to free the data when we're done.
   free_http_connection_data(idx);
+}
+
+/* expmem_http()
+ * expmem's all data allocated to store browser info, referer, cookies, etc...
+ */
+static int expmem_http(void *x)
+{
+  register struct http_connection_data *p = (struct http_connection_data *) x;
+  int tot = 0;
+
+  Context;
+  if (!p) {
+    putlog(LOG_MISC, "*", "Can't expmem clientinfo, no pointer. This should not happen!");
+    return 0;
+  }
+  tot += sizeof(struct http_connection_data);
+  if (p->browser)
+    tot += strlen(p->browser) + 1;
+  if (p->referer)
+    tot += strlen(p->referer) + 1;
+  if (p->get)
+    tot += strlen(p->get) + 1;
+  if (p->cmd)
+    tot += strlen(p->cmd) + 1;
+  if (p->cookies)
+    tot += expmem_cookies(p->cookies);
+  if (p->params)
+    tot += expmem_params(p->params);
+  return tot;
 }
 
 /* out_http():
@@ -694,7 +764,7 @@ static char *decode_url(char *paramurl)
     // set the pointer to the beginning of the next string
     url = p + 1;
     // first check if there are enough chars left to decode
-    if (strlen(url) >= 2) {
+    if (strlen(url+1) >= 2) {
       // the number behind '%' is a hex-number which is the ASCII code of
       // the char, so dump the hex into a string and scan it
       snprintf(hex, 5, "0x%c%c", p[1], p[2]);
@@ -725,43 +795,6 @@ static char *decode_url(char *paramurl)
   return decoded_url;
 }
 
-/* encode_url():
- * encodes all special characters in an url
- */
-static char encoded_url_buf[128];
-static char *eu_last_url;
-static char *encode_url(char *url)
-{
-  char *buf;
-  unsigned char c;
-
-  Assert(url);
-  // if we are going to re-encode the same URL again, then
-  // save some CPU time and just return our buffer again
-  // (I guess noone would mess with that buffer, so it _should_
-  //  be save)
-  if (url == eu_last_url)
-    return encoded_url_buf;
-  else
-    eu_last_url = url;
-  buf = encoded_url_buf;
-  while (url[0] && (buf < (encoded_url_buf + 120))) {
-    c = url[0];
-    if (((c >= 97) && (c <= 122)) || ((c >= 65) && (c <= 90))) {
-      buf[0] = c;
-      buf++;
-    } else {
-      buf[0] = '%';
-      buf++;
-      snprintf(buf, 3, "%02x", c);
-      buf += 2;
-    }
-    url++;
-  }
-  buf[0] = 0;
-  return encoded_url_buf;
-}
-
 /* csplit()
  * basically the same as nsplit, but allows you to define
  * the divider.
@@ -782,127 +815,4 @@ static char *csplit(char **rest, char divider)
     *o++ = 0;
   *rest = o;
   return r;
-}
-
-static void set_cookie(int idx, char *name, char *value)
-{
-  char tbuf[40], *buf;
-  time_t tt;
-  int len;
-
-  tt = now + 30 * 60 * 60 * 24;
-  strftime(tbuf, sizeof(tbuf), "%a, %d-%b-%Y %H:%M:%S GMT", localtime(&tt));
-  len = 34 + strlen(name) + strlen(value) + strlen(tbuf) + 1;
-  buf = nmalloc(len);
-  snprintf(buf, len, "Set-Cookie: %s=%s; expires=%s; path=/\n", name, value, tbuf);
-  http_connection(idx)->headers = llist_1string_add(http_connection(idx)->headers, buf);
-  nfree(buf);
-}
-
-/* append_postparam_string()
- * appends this chunk to the buffer that contains the POST parameters.
- * when the buffer is filled, processing gets started automatically.
- */
-static void append_postparam_string(int idx, char *buf)
-{
-  if (!http_connection(idx)->getpostparams) {
-    debug2("?!? Tried to append post param string '%s' to connection #%d, "
-           "but this connection doesn't expect any params... probably a bug. :(",
-           buf, idx);
-    return;
-  }
-  if (!http_connection(idx)->postparams) {
-
-    if (!(http_connection(idx)->content_length > 0)) {
-      send_http_header(idx, 400);
-      dprintf(idx, "<html><head><title>400 Bad Request</title></head>"
-                   "<body><H1>Bad Request:</H1> invalid "
-                   "content-length '%d'.</body></html>\n",
-                   http_connection(idx)->content_length);
-      killsock(dcc[idx].sock);
-      lostdcc(idx);
-      return;
-    }
-
-    http_connection(idx)->postparams
-       = nmalloc(http_connection(idx)->content_length + 1);
-    http_connection(idx)->postparams[0] = 0;
-    debug1("allocated %d bytes for params", http_connection(idx)->content_length + 1);
-  }
-
-  debug1("appending content: '%s'", buf);
-  debug1("old: '%s'", http_connection(idx)->postparams);
-
-  strncat(http_connection(idx)->postparams,
-          buf,
-          http_connection(idx)->content_length);
-  http_connection(idx)->postparams[http_connection(idx)->content_length] = 0;
-  debug1("new: '%s'", http_connection(idx)->postparams);
-
-  if ((http_connection(idx)->content_length > 0) &&
-       http_connection(idx)->getpostparams &&
-       http_connection(idx)->postparams)
-  {
-    if (strlen(http_connection(idx)->postparams) >= http_connection(idx)->content_length) {
-      debug0("parsing params...");
-      add_params(idx, http_connection(idx)->postparams);
-      process_request(idx);
-    }
-  }
-}
-
-/* send_http_header()
- * sends the http header
- */
-static void send_http_header(int idx, int code)
-{
-  struct llist_1string *h;
-
-  if (code == 200)
-    dprintf(idx, "HTTP/1.0 200 OK\n");
-  else if (code == 401)
-    dprintf(idx, "HTTP/1.0 401 Access Forbidden\n");
-  else if (code == 404)
-    dprintf(idx, "HTTP/1.1 404 Not Found\n");
-  else if (code == 500)
-    dprintf(idx, "HTTP/1.1 500 Internal Server Error\n");
-  else
-    dprintf(idx, "HTTP/1.0 %d %d\n", code, code);
-  dprintf(idx, "Server: EggdropMiniHTTPd/%s\n", HTTPD_VERSION);
-  dprintf(idx, "Content-Type: text/html\n");
-  for (h = http_connection(idx)->headers; h; h = h->next) {
-    debug1("Sending additional header: '%s'", h->s1);
-    dprintf(idx, "%s", h->s1);
-  }
-  dprintf(idx, "\n");
-  http_connection(idx)->code = code;
-}
-
-/* process_request():
- * calls the main processing function process_get_request(), takes the
- * processing time and tries to kill the socket if everything got already
- * sent.
- */
-static void process_request(int idx)
-{
-  struct timeval t;
-  double pre_time;
-
-  Context;
-  Assert(idx >= 0);
-  debug0("now sending...");
-  gettimeofday(&t, NULL);
-  pre_time = (float) t.tv_sec + (((float) t.tv_usec) / 1000000);
-  process_get_request(idx);
-  gettimeofday(&t, NULL);
-  debug1("Processing time: %.3f", ((float) t.tv_sec + (((float) t.tv_usec) / 1000000)) - pre_time);
-  dcc[idx].status = 1;
-#ifndef OLDBOT
-  /* If there's no data in our socket, we immediately get rid of it.
-   */
-  if (!sock_has_data(SOCK_DATA_OUTGOING, dcc[idx].sock)) {
-    killsock(dcc[idx].sock);
-    lostdcc(idx);
-  }
-#endif
 }
