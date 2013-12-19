@@ -1,0 +1,18 @@
+901 *** [snick] hat [schan] betreten
+902 *** [snick] hat [schan] verlassen ([smsg])
+903 *** [snick] hat das IRC verlassem ([smsg])
+904 *** [snick] aenderte seinen Namen zu [snick2]
+905 *** [snick2] aenderte seinen Namen zu [snick]
+906 *** [snick] wurde von [punisher] aus [schan] geworfen ([reason])
+907 *** [snick] verschwand von [schan] in einem netsplit.
+908 *** [snick] rejoined [schan] from a netsplit
+909 *** [snick] hat [bnbot]s partyline verlassen
+910 *** [snick] hat [bnbots]s partyline betreten
+
+920 Kein Fehler.
+921 Keine Ergebnisse gefunden.
+922 Keine Suchanfrage.
+923 Tut mir leid, aber wildcards ('?' bzw '*') sind bei der Suche nicht erlaubt.
+924 Der Nick, nach dem du gesucht hast, war zu lang.
+925 Die Suche hat zu viele Ergebnisse geliefert. Versuche es doch noch einmal mit einem etwas genaueren Suchbegriff.
+926 Internal Server Error: too long host found during search
